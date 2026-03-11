@@ -12,13 +12,13 @@ A collection of Deno-based Supabase Edge Functions that scrape job listings from
   - [green-house.ts](#green-housets)
   - [hackernews.ts](#hackernewsts)
   - [jobicy.ts](#jobicyts)
-  - [remoteok.ts](#remoteokets)
+  - [remoteok.ts](#remoteokts)
   - [the-muse.ts](#the-musets)
   - [yc-jobs.ts](#yc-jobsts)
 - [Shared Location Helper (V7)](#shared-location-helper-v7)
 - [Database Schema](#database-schema)
-  - [job_alerts Table](#job_alerts-table)
-  - [jobs_preferences Table](#jobs_preferences-table)
+  - [job\_alerts Table](#job_alerts-table)
+  - [jobs\_preferences Table](#jobs_preferences-table)
 - [Database Queries](#database-queries)
   - [Matching Function](#matching-function)
   - [GIN Indexes](#gin-indexes)
@@ -30,7 +30,7 @@ A collection of Deno-based Supabase Edge Functions that scrape job listings from
 
 ## Architecture Overview
 
-```
+```text
 External Job APIs
       │
       ▼
@@ -67,7 +67,7 @@ External Job APIs
 Fetches jobs from the **Ashby HQ** public job board API for a curated list of companies.
 
 | Detail | Value |
-|---|---|
+| --- | --- |
 | API | `https://api.ashbyhq.com/posting-api/job-board/{token}` |
 | Companies | OpenAI, Anthropic, Notion, Linear, Ashby, Perplexity AI, Cohere, Vercel, Supabase, Replit, Retool, Ramp, Deel, 1Password, and more (22 total) |
 | Jobs per company | Up to 5 |
@@ -75,6 +75,7 @@ Fetches jobs from the **Ashby HQ** public job board API for a curated list of co
 | Work mode mapping | `workplaceType` → REMOTE / HYBRID / ONSITE |
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -90,7 +91,7 @@ Fetches jobs from the **Ashby HQ** public job board API for a curated list of co
 Fetches jobs from the **Greenhouse** public job board API for a curated list of companies.
 
 | Detail | Value |
-|---|---|
+| --- | --- |
 | API | `https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true` |
 | Companies | Twitch, Discord, Figma, Stripe, Airbnb, Reddit, Coinbase, Databricks, OpenAI, Cloudflare, Hugging Face, Scale AI, GitLab, Unity, and more (25 total) |
 | Jobs per company | Up to 5 |
@@ -98,6 +99,7 @@ Fetches jobs from the **Greenhouse** public job board API for a curated list of 
 | HTML content | Unescapes HTML entities before stripping tags |
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -113,7 +115,7 @@ Fetches jobs from the **Greenhouse** public job board API for a curated list of 
 Fetches recent job posts from the **HackerNews Algolia API**.
 
 | Detail | Value |
-|---|---|
+| --- | --- |
 | API | `https://hn.algolia.com/api/v1/search_by_date?tags=job&hitsPerPage=20` |
 | Jobs fetched | Up to 20 |
 | Title parsing | Splits on `is hiring`, `\|`, ` - `, `:` to extract company + role |
@@ -122,6 +124,7 @@ Fetches recent job posts from the **HackerNews Algolia API**.
 | Industry | Hardcoded `Enterprise Software` (HN skews heavily tech) |
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -136,7 +139,7 @@ Fetches recent job posts from the **HackerNews Algolia API**.
 Fetches exclusively **remote jobs** from the Jobicy public API.
 
 | Detail | Value |
-|---|---|
+| --- | --- |
 | API | `https://jobicy.com/api/v2/remote-jobs?count=50` |
 | Jobs fetched | Up to 50 |
 | Work mode | Always `REMOTE` |
@@ -144,6 +147,7 @@ Fetches exclusively **remote jobs** from the Jobicy public API.
 | Experience mapping | Mapped from `jobLevel` field |
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -158,7 +162,7 @@ Fetches exclusively **remote jobs** from the Jobicy public API.
 Fetches **remote jobs** from RemoteOK. Uses an `allorigins.win` proxy to bypass CORS restrictions.
 
 | Detail | Value |
-|---|---|
+| --- | --- |
 | API | `https://remoteok.com/api` (via `https://api.allorigins.win/raw?url=...`) |
 | Jobs fetched | Up to 20 valid jobs (filters out entries without `company` and `position`) |
 | Work mode | Always `REMOTE` |
@@ -167,6 +171,7 @@ Fetches **remote jobs** from RemoteOK. Uses an `allorigins.win` proxy to bypass 
 | User-Agent | Spoofed Chrome UA to avoid blocks |
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -181,7 +186,7 @@ Fetches **remote jobs** from RemoteOK. Uses an `allorigins.win` proxy to bypass 
 Fetches jobs from **The Muse** public API with pagination.
 
 | Detail | Value |
-|---|---|
+| --- | --- |
 | API | `https://www.themuse.com/api/public/jobs?page={n}&descending=true` |
 | Pages fetched | 2 pages |
 | Work mode | Detected from title, location string, or first 500 chars of description (`remote` → REMOTE, `hybrid` → HYBRID) |
@@ -189,6 +194,7 @@ Fetches jobs from **The Muse** public API with pagination.
 | Industry mapping | Mapped from `categories[0].name` (software/engineering, marketing, data/analytics, design, sales, education) |
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -203,7 +209,7 @@ Fetches jobs from **The Muse** public API with pagination.
 Fetches active job listings from **Y Combinator startups** via the RapidAPI YC Jobs endpoint.
 
 | Detail | Value |
-|---|---|
+| --- | --- |
 | API | `https://free-y-combinator-jobs-api.p.rapidapi.com/active-jb-7d` |
 | Auth | `RAPIDAPI_KEY` environment variable |
 | Pagination | 2 pages × 10 jobs = up to 20 jobs |
@@ -212,6 +218,7 @@ Fetches active job listings from **Y Combinator startups** via the RapidAPI YC J
 | Fallback description | Auto-generates if `description` is empty |
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -227,7 +234,7 @@ All 7 edge functions share an identical `processLocation()` helper. It resolves 
 
 ### Resolution Priority
 
-```
+```text
 1. Direct country name match against VALID_COUNTRIES set (195 countries)
 2. Country alias lookup — e.g. "US" → "United States", "UK" → "United Kingdom"
 3. Tech hub override map — e.g. "san francisco" → "United States", "bangalore" → "India"
@@ -238,7 +245,7 @@ All 7 edge functions share an identical `processLocation()` helper. It resolves 
 ### Country Aliases
 
 | Input | Resolved |
-|---|---|
+| --- | --- |
 | US, USA, AMERICA | United States |
 | UK, ENGLAND, GREAT BRITAIN | United Kingdom |
 | UAE | United Arab Emirates |
@@ -249,7 +256,7 @@ All 7 edge functions share an identical `processLocation()` helper. It resolves 
 ### Tech Hub Overrides (sample)
 
 | City | Country |
-|---|---|
+| --- | --- |
 | san francisco, sf, bay area, silicon valley | United States |
 | new york, nyc | United States |
 | london, cambridge | United Kingdom |
@@ -265,12 +272,12 @@ All 7 edge functions share an identical `processLocation()` helper. It resolves 
 
 ## Database Schema
 
-### job_alerts Table
+### job\_alerts Table
 
 Every edge function inserts rows with this shape:
 
 | Column | Type | Description |
-|---|---|---|
+| --- | --- | --- |
 | `job_title` | TEXT | Max 200 chars |
 | `company_name` | TEXT | Max 100 chars |
 | `job_description` | TEXT | HTML-stripped plain text |
@@ -285,12 +292,12 @@ Every edge function inserts rows with this shape:
 | `webhook_event_id` | TEXT | Reserved, always `null` |
 | `keywords` | TEXT[] | Auto-extracted keyword array for GIN index matching |
 
-### jobs_preferences Table
+### jobs\_preferences Table
 
 Stores per-user job alert preferences. Matched against incoming jobs by `find_matching_users()`.
 
 | Column | Type | Description |
-|---|---|---|
+| --- | --- | --- |
 | `user_id` | UUID | Foreign key → `profiles.id` |
 | `job_title_keywords` | TEXT[] | Keywords user wants in job title |
 | `experience_levels` | TEXT[] | e.g. `['Entry level', 'Mid-career']` |
@@ -308,7 +315,7 @@ Stores per-user job alert preferences. Matched against incoming jobs by `find_ma
 Located in [database-queries/](database-queries/). Three versions exist, tracking the evolution of the function:
 
 | File | Description |
-|---|---|
+| --- | --- |
 | [matching-fun.sql](database-queries/matching-fun.sql) | **Current (production).** Accepts an extra `input_keywords TEXT[]` parameter for semantic keyword overlap matching on title and sector. |
 | [matching-fun-bef-keyword.sql](database-queries/matching-fun-bef-keyword.sql) | Pre-keywords version with enhanced location logic and word-overlap industry matching but without the `keywords` array param. |
 | [matching-fun-bef-bef-key.sql](database-queries/matching-fun-bef-bef-key.sql) | Earlier baseline version. |
@@ -372,7 +379,7 @@ Run this script once after creating the `jobs_preferences` table.
 ## Environment Variables
 
 | Variable | Required By | Description |
-|---|---|---|
+| --- | --- | --- |
 | `SUPABASE_URL` | All functions | Your Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | All functions | Service role key (bypasses RLS) |
 | `RAPIDAPI_KEY` | `yc-jobs.ts` only | RapidAPI key for the YC Jobs endpoint |
@@ -411,7 +418,7 @@ You can also schedule them using Supabase's built-in **pg_cron** extension or an
 
 ## Data Flow
 
-```
+```text
 1. Edge function is invoked (HTTP GET / scheduled CRON)
          │
 2. Fetch raw jobs from external API
