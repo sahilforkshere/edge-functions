@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 // ==========================================
-// --- UNIVERSAL LOCATION HELPER BLOCK ---
+// --- UNIVERSAL LOCATION HELPER (V7 - LIBRARY + PRIORITY OVERRIDE) ---
 // ==========================================
 import { City, Country } from 'npm:country-state-city';
 
@@ -25,50 +25,86 @@ const VALID_COUNTRIES = new Set([
 ]);
 
 const COUNTRY_ALIASES: Record<string, string> = {
-  "US": "United States",
-  "USA": "United States",
-  "UK": "United Kingdom",
-  "UAE": "United Arab Emirates",
-  "AMERICA": "United States",
-  "ENGLAND": "United Kingdom",
-  "KOREA": "South Korea",
+  "US": "United States", "USA": "United States", "UNITED STATES OF AMERICA": "United States", "AMERICA": "United States",
+  "UK": "United Kingdom", "ENGLAND": "United Kingdom", "GREAT BRITAIN": "United Kingdom",
+  "UAE": "United Arab Emirates", "KOREA": "South Korea", "FR": "France", "DE": "Germany"
 };
 
-function processLocation(rawCity: string | null | undefined, rawCountry: string | null | undefined) {
-    let city = (rawCity && rawCity !== 'NULL') ? rawCity.trim() : '';
-    let country = (rawCountry && rawCountry !== 'NULL') ? rawCountry.trim() : '';
+const TECH_HUB_OVERRIDES: Record<string, string> = {
+  "cambridge": "United Kingdom", 
+  "paris": "France",
+  "london": "United Kingdom",
+  "berlin": "Germany",
+  "san francisco": "United States", "sf": "United States", "bay area": "United States", "silicon valley": "United States",
+  "new york": "United States", "nyc": "United States",
+  "boston": "United States",
+  "austin": "United States",
+  "toronto": "Canada",
+  "sydney": "Australia",
+  "dublin": "Ireland",
+  "amsterdam": "Netherlands",
+  "bangalore": "India", "bengaluru": "India",
+  "san jose": "United States", "dallas": "United States", "redwood city": "United States", 
+  "menlo park": "United States", "palo alto": "United States", "mountain view": "United States"
+};
 
-    // 1. Alias translation (e.g., USA -> United States)
-    if (country && COUNTRY_ALIASES[country.toUpperCase()]) {
-        country = COUNTRY_ALIASES[country.toUpperCase()];
+function processLocation(arg1: string | null | undefined, arg2?: string | null | undefined) {
+    let fullString = [arg1, arg2].filter(Boolean).map(s => String(s).trim()).join(', ');
+    
+    if (!fullString || fullString.toLowerCase() === 'remote' || fullString === 'NULL') {
+        return { finalCity: 'NULL', finalCountry: 'NULL' };
     }
 
-    // 2. The Library Mapper: If we have a City but no Country, find it!
-    if (city && !country) {
-        const foundCities = City.getAllCities().filter((c: any) => c.name.toLowerCase() === city.toLowerCase());
-        if (foundCities.length > 0) {
-            // Grab the first match's country code and translate it to the full name
-            const countryObj = Country.getCountryByCode(foundCities[0].countryCode);
-            if (countryObj) country = countryObj.name;
+    let validCountries: string[] = [];
+    const delimiters = /[,;||\/]/;
+    let tokens = fullString.split(delimiters).map(t => t.trim()).filter(Boolean);
+
+    for (let token of tokens) {
+        let c = token.replace(/remote|worldwide|anywhere|[-()]/ig, '').trim();
+        if (c && COUNTRY_ALIASES[c.toUpperCase()]) c = COUNTRY_ALIASES[c.toUpperCase()];
+        
+        if (c) {
+            c = c.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+            if (VALID_COUNTRIES.has(c)) validCountries.push(c);
         }
     }
 
-    // 3. The Strict Array Bouncer: Validate the country
-    if (country) {
-        // Capitalize first letters so it matches the Set properly
-        const formattedCountry = country.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    let potentialCity = fullString.split(delimiters)[0].trim().replace(/remote|worldwide|anywhere/ig, '').trim();
+    let finalCity = 'NULL';
 
-        if (!VALID_COUNTRIES.has(formattedCountry)) {
-            // If the API sent "EMEA" or "Anywhere", kill it.
-            country = 'NULL';
+    if (potentialCity) {
+        let checkCityAsCountry = potentialCity.toUpperCase();
+        if (COUNTRY_ALIASES[checkCityAsCountry]) checkCityAsCountry = COUNTRY_ALIASES[checkCityAsCountry].toUpperCase();
+        else checkCityAsCountry = potentialCity.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+
+        if (VALID_COUNTRIES.has(checkCityAsCountry)) {
+            finalCity = 'NULL'; 
+            validCountries.push(checkCityAsCountry);
         } else {
-            country = formattedCountry;
+            finalCity = potentialCity;
         }
     }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
+        const checkKey = finalCity.toLowerCase();
+        if (TECH_HUB_OVERRIDES[checkKey]) {
+            validCountries.push(TECH_HUB_OVERRIDES[checkKey]);
+        }
+    }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
+        const foundCity = City.getAllCities().find((c: any) => c.name.toLowerCase() === finalCity.toLowerCase());
+        if (foundCity) {
+            const countryObj = Country.getCountryByCode(foundCity.countryCode);
+            if (countryObj) validCountries.push(countryObj.name);
+        }
+    }
+
+    validCountries = [...new Set(validCountries)]; 
 
     return { 
-        finalCity: city || 'NULL', 
-        finalCountry: country || 'NULL' 
+        finalCity: finalCity || 'NULL', 
+        finalCountry: validCountries.length > 0 ? validCountries.join(', ') : 'NULL' 
     };
 }
 // ==========================================
@@ -101,18 +137,10 @@ serve(async (req) => {
         .replace(/\s+/g, ' ')
         .trim();
 
-      // --- JOBICY LOCATION ---
-      let rawCity = 'NULL';
-      let rawCountry = (job.jobGeo || '').replace(/[-()]/g, '').trim();
-      
-      // If it contains a comma, assume it's "City, Country"
-      if (rawCountry.includes(',')) {
-          const parts = rawCountry.split(',');
-          rawCity = parts[0].trim();
-          rawCountry = parts[1].trim();
-      }
-
-      const { finalCity: city, finalCountry: country } = processLocation(rawCity, rawCountry);
+      // --- JOBICY LOCATION PARSER ---
+      // We pass the raw string straight to V7! No need to manually split by comma anymore.
+      const rawGeo = job.jobGeo || '';
+      const { finalCity: city, finalCountry: country } = processLocation(rawGeo);
 
       let mappedExp = 'ENTRY';
       const rawLevel = String(job.jobLevel || '').toLowerCase();
@@ -166,6 +194,16 @@ serve(async (req) => {
           mappedIndustry = 'Sector Agnostic';
       }
 
+      // --- KEYWORD EXTRACTOR ---
+      const rawTitle = job.jobTitle || '';
+      const mappedWorkMode = 'REMOTE'; // Jobicy is exclusively remote
+      
+      // We combine the raw title, raw industry string, our mapped industry, and the job type
+      const combinedText = `${rawTitle} ${cleanIndustryStr} ${mappedIndustry} ${mappedType} ${mappedWorkMode}`.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+      const stopWords = new Set(['and', 'or', 'the', 'in', 'of', 'for', 'a', 'to', 'with']);
+      const rawKeywords = combinedText.split(/\s+/).filter(word => word.length > 1 && !stopWords.has(word));
+      const finalKeywords = [...new Set(rawKeywords)];
+
       return {
         job_title: job.jobTitle ? job.jobTitle.substring(0, 200) : 'Unknown Title',
         company_name: job.companyName ? job.companyName.substring(0, 100) : 'Unknown Company',
@@ -173,12 +211,13 @@ serve(async (req) => {
         source_urls: job.url ? [job.url] : [],
         location_city: city, 
         location_country: country, 
-        work_mode: 'REMOTE',
+        work_mode: mappedWorkMode,
         job_type: mappedType, 
         industry: mappedIndustry, 
         experience: mappedExp, 
         event_date: job.pubDate ? job.pubDate.split(' ')[0] : new Date().toISOString().split('T')[0],
-        webhook_event_id: null  
+        webhook_event_id: null,
+        keywords: finalKeywords // 🌟 Added array for the Postgres index
       };
     });
 

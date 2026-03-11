@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 // ==========================================
-// --- UNIVERSAL LOCATION HELPER BLOCK ---
+// --- UNIVERSAL LOCATION HELPER (V7 - LIBRARY + PRIORITY OVERRIDE) ---
 // ==========================================
 import { City, Country } from 'npm:country-state-city';
 
@@ -25,44 +25,86 @@ const VALID_COUNTRIES = new Set([
 ]);
 
 const COUNTRY_ALIASES: Record<string, string> = {
-  "US": "United States",
-  "USA": "United States",
-  "UK": "United Kingdom",
-  "UAE": "United Arab Emirates",
-  "AMERICA": "United States",
-  "ENGLAND": "United Kingdom",
-  "KOREA": "South Korea",
+  "US": "United States", "USA": "United States", "UNITED STATES OF AMERICA": "United States", "AMERICA": "United States",
+  "UK": "United Kingdom", "ENGLAND": "United Kingdom", "GREAT BRITAIN": "United Kingdom",
+  "UAE": "United Arab Emirates", "KOREA": "South Korea", "FR": "France", "DE": "Germany"
 };
 
-function processLocation(rawCity: string | null | undefined, rawCountry: string | null | undefined) {
-    let city = (rawCity && rawCity !== 'NULL') ? rawCity.trim() : '';
-    let country = (rawCountry && rawCountry !== 'NULL') ? rawCountry.trim() : '';
+const TECH_HUB_OVERRIDES: Record<string, string> = {
+  "cambridge": "United Kingdom", 
+  "paris": "France",
+  "london": "United Kingdom",
+  "berlin": "Germany",
+  "san francisco": "United States", "sf": "United States", "bay area": "United States", "silicon valley": "United States",
+  "new york": "United States", "nyc": "United States",
+  "boston": "United States",
+  "austin": "United States",
+  "toronto": "Canada",
+  "sydney": "Australia",
+  "dublin": "Ireland",
+  "amsterdam": "Netherlands",
+  "bangalore": "India", "bengaluru": "India",
+  "san jose": "United States", "dallas": "United States", "redwood city": "United States", 
+  "menlo park": "United States", "palo alto": "United States", "mountain view": "United States"
+};
 
-    if (country && COUNTRY_ALIASES[country.toUpperCase()]) {
-        country = COUNTRY_ALIASES[country.toUpperCase()];
+function processLocation(arg1: string | null | undefined, arg2?: string | null | undefined) {
+    let fullString = [arg1, arg2].filter(Boolean).map(s => String(s).trim()).join(', ');
+    
+    if (!fullString || fullString.toLowerCase() === 'remote' || fullString === 'NULL') {
+        return { finalCity: 'NULL', finalCountry: 'NULL' };
     }
 
-    if (city && !country) {
-        const foundCities = City.getAllCities().filter((c: any) => c.name.toLowerCase() === city.toLowerCase());
-        if (foundCities.length > 0) {
-            const countryObj = Country.getCountryByCode(foundCities[0].countryCode);
-            if (countryObj) country = countryObj.name;
+    let validCountries: string[] = [];
+    const delimiters = /[,;||\/]/;
+    let tokens = fullString.split(delimiters).map(t => t.trim()).filter(Boolean);
+
+    for (let token of tokens) {
+        let c = token.replace(/remote|worldwide|anywhere|[-()]/ig, '').trim();
+        if (c && COUNTRY_ALIASES[c.toUpperCase()]) c = COUNTRY_ALIASES[c.toUpperCase()];
+        
+        if (c) {
+            c = c.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+            if (VALID_COUNTRIES.has(c)) validCountries.push(c);
         }
     }
 
-    if (country) {
-        const formattedCountry = country.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    let potentialCity = fullString.split(delimiters)[0].trim().replace(/remote|worldwide|anywhere/ig, '').trim();
+    let finalCity = 'NULL';
 
-        if (!VALID_COUNTRIES.has(formattedCountry)) {
-            country = 'NULL';
+    if (potentialCity) {
+        let checkCityAsCountry = potentialCity.toUpperCase();
+        if (COUNTRY_ALIASES[checkCityAsCountry]) checkCityAsCountry = COUNTRY_ALIASES[checkCityAsCountry].toUpperCase();
+        else checkCityAsCountry = potentialCity.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+
+        if (VALID_COUNTRIES.has(checkCityAsCountry)) {
+            finalCity = 'NULL'; 
+            validCountries.push(checkCityAsCountry);
         } else {
-            country = formattedCountry;
+            finalCity = potentialCity;
         }
     }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
+        const checkKey = finalCity.toLowerCase();
+        if (TECH_HUB_OVERRIDES[checkKey]) {
+            validCountries.push(TECH_HUB_OVERRIDES[checkKey]);
+        }
+    }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
+        const foundCity = City.getAllCities().find((c: any) => c.name.toLowerCase() === finalCity.toLowerCase());
+        if (foundCity) {
+            const countryObj = Country.getCountryByCode(foundCity.countryCode);
+            if (countryObj) validCountries.push(countryObj.name);
+        }
+    }
+
+    validCountries = [...new Set(validCountries)]; 
 
     return { 
-        finalCity: city || 'NULL', 
-        finalCountry: country || 'NULL' 
+        finalCity: finalCity || 'NULL', 
+        finalCountry: validCountries.length > 0 ? validCountries.join(', ') : 'NULL' 
     };
 }
 // ==========================================
@@ -157,7 +199,6 @@ serve(async (req) => {
         rawCountry = 'United States';
       }
 
-      // Run it through the universal validator just in case!
       const { finalCity: validatedCity, finalCountry: validatedCountry } = processLocation(rawCity, rawCountry);
 
       const sourceUrl = job.url ? job.url : `https://news.ycombinator.com/item?id=${job.objectID}`;
@@ -170,6 +211,16 @@ serve(async (req) => {
           .trim();
       }
 
+      const mappedWorkMode = isRemote ? 'REMOTE' : 'ONSITE';
+      const mappedType = 'FULLTIME';
+      const mappedIndustry = 'Enterprise Software'; // HN is heavily skewed towards this
+
+      // --- KEYWORD EXTRACTOR ---
+      const combinedText = `${title} ${company} ${mappedIndustry} ${mappedType} ${mappedWorkMode}`.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+      const stopWords = new Set(['and', 'or', 'the', 'in', 'of', 'for', 'a', 'to', 'with', 'is', 'hiring', 'looking']);
+      const rawKeywords = combinedText.split(/\s+/).filter(word => word.length > 1 && !stopWords.has(word));
+      const finalKeywords = [...new Set(rawKeywords)];
+
       return {
         job_title: title.substring(0, 200),
         company_name: company.substring(0, 100),
@@ -177,12 +228,13 @@ serve(async (req) => {
         source_urls: [sourceUrl],
         location_city: validatedCity, 
         location_country: validatedCountry, 
-        work_mode: isRemote ? 'REMOTE' : 'ONSITE', 
-        job_type: 'FULLTIME', 
-        industry: 'Sector Agnostic', // Fallback for your Word Overlap engine
-        experience: /senior/i.test(fullTitle) ? 'SENIOR' : 'ENTRY', 
+        work_mode: mappedWorkMode, 
+        job_type: mappedType, 
+        industry: mappedIndustry, 
+        experience: /senior|lead|principal/i.test(fullTitle) ? 'SENIOR' : 'ENTRY', 
         event_date: job.created_at ? job.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
-        webhook_event_id: null  
+        webhook_event_id: null,
+        keywords: finalKeywords // 🌟 Added array for the Postgres index
       };
     });
 

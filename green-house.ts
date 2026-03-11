@@ -2,8 +2,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 // ==========================================
-// --- LIGHTWEIGHT LOCATION HELPER (V3) ---
+// --- UNIVERSAL LOCATION HELPER (V7 - LIBRARY + PRIORITY OVERRIDE) ---
 // ==========================================
+import { City, Country } from 'npm:country-state-city';
+
 const VALID_COUNTRIES = new Set([
   "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
   "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina", "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso", "Burundi",
@@ -23,56 +25,85 @@ const VALID_COUNTRIES = new Set([
 ]);
 
 const COUNTRY_ALIASES: Record<string, string> = {
-  "US": "United States",
-  "USA": "United States",
-  "UK": "United Kingdom",
-  "UAE": "United Arab Emirates",
-  "AMERICA": "United States",
-  "ENGLAND": "United Kingdom",
-  "KOREA": "South Korea",
+  "US": "United States", "USA": "United States", "UNITED STATES OF AMERICA": "United States", "AMERICA": "United States",
+  "UK": "United Kingdom", "ENGLAND": "United Kingdom", "GREAT BRITAIN": "United Kingdom",
+  "UAE": "United Arab Emirates", "KOREA": "South Korea", "FR": "France", "DE": "Germany"
 };
 
-function processLocation(rawLocationString: string | null | undefined) {
-    let input = (rawLocationString && rawLocationString !== 'NULL') ? String(rawLocationString).trim() : '';
-    let validCountries: string[] = [];
-    let primaryCity = 'NULL';
+const TECH_HUB_OVERRIDES: Record<string, string> = {
+  "cambridge": "United Kingdom", 
+  "paris": "France",
+  "london": "United Kingdom",
+  "berlin": "Germany",
+  "san francisco": "United States", "sf": "United States", "bay area": "United States", "silicon valley": "United States",
+  "new york": "United States", "nyc": "United States",
+  "boston": "United States",
+  "austin": "United States",
+  "toronto": "Canada",
+  "sydney": "Australia",
+  "dublin": "Ireland",
+  "amsterdam": "Netherlands",
+  "bangalore": "India", "bengaluru": "India",
+  "san jose": "United States", "dallas": "United States", "redwood city": "United States", 
+  "menlo park": "United States", "palo alto": "United States", "mountain view": "United States"
+};
 
-    if (!input || input.toLowerCase() === 'remote') {
+function processLocation(arg1: string | null | undefined, arg2?: string | null | undefined) {
+    let fullString = [arg1, arg2].filter(Boolean).map(s => String(s).trim()).join(', ');
+    
+    if (!fullString || fullString.toLowerCase() === 'remote' || fullString === 'NULL') {
         return { finalCity: 'NULL', finalCountry: 'NULL' };
     }
 
-    // 1. Grab the first potential city (usually before the first comma or semicolon)
-    if (input.includes(',')) primaryCity = input.split(',')[0].trim();
-    else if (input.includes(';')) primaryCity = input.split(';')[0].trim();
-    else primaryCity = input;
-
-    primaryCity = primaryCity.replace(/remote|worldwide|anywhere/ig, '').trim();
-    if(!primaryCity) primaryCity = 'NULL';
-
-    // 2. Multi-Country Splitter: Chop the string by ANY delimiter to find ALL countries
+    let validCountries: string[] = [];
     const delimiters = /[,;||\/]/;
-    let tokens = input.split(delimiters).map(t => t.trim()).filter(Boolean);
+    let tokens = fullString.split(delimiters).map(t => t.trim()).filter(Boolean);
 
     for (let token of tokens) {
         let c = token.replace(/remote|worldwide|anywhere|[-()]/ig, '').trim();
-        
-        if (c && COUNTRY_ALIASES[c.toUpperCase()]) {
-             c = COUNTRY_ALIASES[c.toUpperCase()];
-        }
+        if (c && COUNTRY_ALIASES[c.toUpperCase()]) c = COUNTRY_ALIASES[c.toUpperCase()];
         
         if (c) {
             c = c.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-            if (VALID_COUNTRIES.has(c)) {
-                validCountries.push(c); // Add to our list if it passes the bouncer!
-            }
+            if (VALID_COUNTRIES.has(c)) validCountries.push(c);
         }
     }
 
-    validCountries = [...new Set(validCountries)]; // Deduplicate just in case
+    let potentialCity = fullString.split(delimiters)[0].trim().replace(/remote|worldwide|anywhere/ig, '').trim();
+    let finalCity = 'NULL';
+
+    if (potentialCity) {
+        let checkCityAsCountry = potentialCity.toUpperCase();
+        if (COUNTRY_ALIASES[checkCityAsCountry]) checkCityAsCountry = COUNTRY_ALIASES[checkCityAsCountry].toUpperCase();
+        else checkCityAsCountry = potentialCity.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+
+        if (VALID_COUNTRIES.has(checkCityAsCountry)) {
+            finalCity = 'NULL'; 
+            validCountries.push(checkCityAsCountry);
+        } else {
+            finalCity = potentialCity;
+        }
+    }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
+        const checkKey = finalCity.toLowerCase();
+        if (TECH_HUB_OVERRIDES[checkKey]) {
+            validCountries.push(TECH_HUB_OVERRIDES[checkKey]);
+        }
+    }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
+        const foundCity = City.getAllCities().find((c: any) => c.name.toLowerCase() === finalCity.toLowerCase());
+        if (foundCity) {
+            const countryObj = Country.getCountryByCode(foundCity.countryCode);
+            if (countryObj) validCountries.push(countryObj.name);
+        }
+    }
+
+    validCountries = [...new Set(validCountries)]; 
 
     return { 
-        finalCity: primaryCity, 
-        // Feed the SQL engine a beautifully clean string like: "Belgium, Austria, Denmark"
+        finalCity: finalCity || 'NULL', 
         finalCountry: validCountries.length > 0 ? validCountries.join(', ') : 'NULL' 
     };
 }
@@ -147,8 +178,23 @@ serve(async (req) => {
             .trim();
         }
 
-        // Just pass the entire raw string straight into our new V3 Scanner
+        // Just pass the entire raw string straight into our V7 Scanner
         const { finalCity: city, finalCountry: country } = processLocation(locationString);
+        
+        let rawDept = '';
+        if (job.departments && Array.isArray(job.departments) && job.departments.length > 0) {
+            rawDept = job.departments[0].name || '';
+        }
+
+        const mappedWorkMode = isRemote ? 'REMOTE' : 'ONSITE';
+        const mappedType = 'FULLTIME';
+        const mappedIndustry = title ? String(title) : 'Sector Agnostic';
+
+        // --- KEYWORD EXTRACTOR ---
+        const combinedText = `${title} ${rawDept} ${mappedIndustry} ${mappedType} ${mappedWorkMode}`.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+        const stopWords = new Set(['and', 'or', 'the', 'in', 'of', 'for', 'a', 'to', 'with']);
+        const rawKeywords = combinedText.split(/\s+/).filter(word => word.length > 1 && !stopWords.has(word));
+        const finalKeywords = [...new Set(rawKeywords)];
 
         return {
           job_title: title.substring(0, 200),
@@ -157,12 +203,13 @@ serve(async (req) => {
           source_urls: job.absolute_url ? [job.absolute_url] : [],
           location_city: city,
           location_country: country,
-          work_mode: isRemote ? 'REMOTE' : 'ONSITE',
-          job_type: 'FULLTIME', 
-          industry: title ? String(title) : 'Sector Agnostic',
+          work_mode: mappedWorkMode,
+          job_type: mappedType, 
+          industry: mappedIndustry,
           experience: /senior|lead|principal|staff|manager/i.test(title) ? 'SENIOR' : 'ENTRY',
           event_date: job.updated_at ? job.updated_at.split('T')[0] : new Date().toISOString().split('T')[0],
-          webhook_event_id: null
+          webhook_event_id: null,
+          keywords: finalKeywords // 🌟 Added array for the Postgres index
         };
       });
 

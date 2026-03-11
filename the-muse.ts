@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 // ==========================================
-// --- UNIVERSAL LOCATION HELPER BLOCK ---
+// --- UNIVERSAL LOCATION HELPER (V7 - LIBRARY + PRIORITY OVERRIDE) ---
 // ==========================================
 import { City, Country } from 'npm:country-state-city';
 
@@ -30,10 +30,25 @@ const COUNTRY_ALIASES: Record<string, string> = {
   "UAE": "United Arab Emirates", "KOREA": "South Korea", "FR": "France", "DE": "Germany"
 };
 
-// V6 Accepts 1 or 2 arguments so it works globally across all your scripts
+const TECH_HUB_OVERRIDES: Record<string, string> = {
+  "cambridge": "United Kingdom", 
+  "paris": "France",
+  "london": "United Kingdom",
+  "berlin": "Germany",
+  "san francisco": "United States", "sf": "United States", "bay area": "United States", "silicon valley": "United States",
+  "new york": "United States", "nyc": "United States",
+  "boston": "United States",
+  "austin": "United States",
+  "toronto": "Canada",
+  "sydney": "Australia",
+  "dublin": "Ireland",
+  "amsterdam": "Netherlands",
+  "bangalore": "India", "bengaluru": "India",
+  "san jose": "United States", "dallas": "United States", "redwood city": "United States", 
+  "menlo park": "United States", "palo alto": "United States", "mountain view": "United States"
+};
+
 function processLocation(arg1: string | null | undefined, arg2?: string | null | undefined) {
-    
-    // Combine inputs into one string (e.g., "Germany, UK" or "San Francisco, USA")
     let fullString = [arg1, arg2].filter(Boolean).map(s => String(s).trim()).join(', ');
     
     if (!fullString || fullString.toLowerCase() === 'remote' || fullString === 'NULL') {
@@ -41,8 +56,6 @@ function processLocation(arg1: string | null | undefined, arg2?: string | null |
     }
 
     let validCountries: string[] = [];
-    
-    // 1. Extract ALL explicitly listed countries from anywhere in the string
     const delimiters = /[,;||\/]/;
     let tokens = fullString.split(delimiters).map(t => t.trim()).filter(Boolean);
 
@@ -52,38 +65,34 @@ function processLocation(arg1: string | null | undefined, arg2?: string | null |
         
         if (c) {
             c = c.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-            if (VALID_COUNTRIES.has(c)) {
-                validCountries.push(c);
-            }
+            if (VALID_COUNTRIES.has(c)) validCountries.push(c);
         }
     }
 
-    // 2. Identify the potential City (usually the first item before a comma)
     let potentialCity = fullString.split(delimiters)[0].trim().replace(/remote|worldwide|anywhere/ig, '').trim();
     let finalCity = 'NULL';
 
-    // 3. THE BOUNCER: Is the "City" actually a Country? (e.g., "Germany")
     if (potentialCity) {
         let checkCityAsCountry = potentialCity.toUpperCase();
-        if (COUNTRY_ALIASES[checkCityAsCountry]) {
-            checkCityAsCountry = COUNTRY_ALIASES[checkCityAsCountry].toUpperCase();
-        } else {
-            checkCityAsCountry = potentialCity.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-        }
+        if (COUNTRY_ALIASES[checkCityAsCountry]) checkCityAsCountry = COUNTRY_ALIASES[checkCityAsCountry].toUpperCase();
+        else checkCityAsCountry = potentialCity.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 
         if (VALID_COUNTRIES.has(checkCityAsCountry)) {
-            // It is a country! Reject it from the city column.
             finalCity = 'NULL'; 
-            validCountries.push(checkCityAsCountry); // Add it to countries instead!
+            validCountries.push(checkCityAsCountry);
         } else {
-            // It is a real city!
             finalCity = potentialCity;
         }
     }
 
-    // 4. THE LIBRARY MAPPER: If no countries were found, let the NPM library figure it out!
     if (validCountries.length === 0 && finalCity !== 'NULL') {
-        // Using .find() instead of .filter() stops the search early, saving precious memory!
+        const checkKey = finalCity.toLowerCase();
+        if (TECH_HUB_OVERRIDES[checkKey]) {
+            validCountries.push(TECH_HUB_OVERRIDES[checkKey]);
+        }
+    }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
         const foundCity = City.getAllCities().find((c: any) => c.name.toLowerCase() === finalCity.toLowerCase());
         if (foundCity) {
             const countryObj = Country.getCountryByCode(foundCity.countryCode);
@@ -91,7 +100,7 @@ function processLocation(arg1: string | null | undefined, arg2?: string | null |
         }
     }
 
-    validCountries = [...new Set(validCountries)]; // Deduplicate just in case
+    validCountries = [...new Set(validCountries)]; 
 
     return { 
         finalCity: finalCity || 'NULL', 
@@ -181,9 +190,10 @@ serve(async (req) => {
       }
 
       let mappedIndustry = 'Sector Agnostic'; 
+      let rawCategory = '';
 
       if (job.categories && job.categories.length > 0) {
-          const rawCategory = job.categories[0].name.toLowerCase();
+          rawCategory = job.categories[0].name.toLowerCase();
           
           if (rawCategory.includes('software') || rawCategory.includes('engineering')) {
               mappedIndustry = 'Enterprise Software'; 
@@ -200,6 +210,15 @@ serve(async (req) => {
           }
       }
 
+      // --- KEYWORD EXTRACTOR ---
+      const rawTitle = job.name || '';
+      const mappedType = 'FULLTIME';
+
+      const combinedText = `${rawTitle} ${mappedIndustry} ${rawCategory} ${mappedType} ${mappedWorkMode}`.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+      const stopWords = new Set(['and', 'or', 'the', 'in', 'of', 'for', 'a', 'to', 'with']);
+      const rawKeywords = combinedText.split(/\s+/).filter(word => word.length > 1 && !stopWords.has(word));
+      const finalKeywords = [...new Set(rawKeywords)];
+
       return {
         job_title: job.name ? job.name.substring(0, 200) : 'Unknown Title',
         company_name: job.company && job.company.name ? job.company.name.substring(0, 100) : 'Unknown Company',
@@ -208,11 +227,12 @@ serve(async (req) => {
         location_city: city, 
         location_country: country, 
         work_mode: mappedWorkMode, 
-        job_type: 'FULLTIME', 
+        job_type: mappedType, 
         industry: mappedIndustry, 
         experience: mappedExp, 
         event_date: job.publication_date ? job.publication_date.split('T')[0] : new Date().toISOString().split('T')[0],
-        webhook_event_id: null  
+        webhook_event_id: null,
+        keywords: finalKeywords // 🌟 Added array for the Postgres index
       };
     });
 

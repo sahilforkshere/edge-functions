@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 // ==========================================
-// --- UNIVERSAL LOCATION HELPER BLOCK ---
+// --- UNIVERSAL LOCATION HELPER (V7 - LIBRARY + PRIORITY OVERRIDE) ---
 // ==========================================
 import { City, Country } from 'npm:country-state-city';
 
@@ -25,56 +25,91 @@ const VALID_COUNTRIES = new Set([
 ]);
 
 const COUNTRY_ALIASES: Record<string, string> = {
-  "US": "United States",
-  "USA": "United States",
-  "UK": "United Kingdom",
-  "UAE": "United Arab Emirates",
-  "AMERICA": "United States",
-  "ENGLAND": "United Kingdom",
-  "KOREA": "South Korea",
+  "US": "United States", "USA": "United States", "UNITED STATES OF AMERICA": "United States", "AMERICA": "United States",
+  "UK": "United Kingdom", "ENGLAND": "United Kingdom", "GREAT BRITAIN": "United Kingdom",
+  "UAE": "United Arab Emirates", "KOREA": "South Korea", "FR": "France", "DE": "Germany"
 };
 
-function processLocation(rawCity: string | null | undefined, rawCountry: string | null | undefined) {
-    let city = (rawCity && rawCity !== 'NULL') ? rawCity.trim() : '';
-    let country = (rawCountry && rawCountry !== 'NULL') ? rawCountry.trim() : '';
+const TECH_HUB_OVERRIDES: Record<string, string> = {
+  "cambridge": "United Kingdom", 
+  "paris": "France",
+  "london": "United Kingdom",
+  "berlin": "Germany",
+  "san francisco": "United States", "sf": "United States", "bay area": "United States", "silicon valley": "United States",
+  "new york": "United States", "nyc": "United States",
+  "boston": "United States",
+  "austin": "United States",
+  "toronto": "Canada",
+  "sydney": "Australia",
+  "dublin": "Ireland",
+  "amsterdam": "Netherlands",
+  "bangalore": "India", "bengaluru": "India",
+  "san jose": "United States", "dallas": "United States", "redwood city": "United States", 
+  "menlo park": "United States", "palo alto": "United States", "mountain view": "United States"
+};
 
-    // 1. Alias translation (e.g., USA -> United States)
-    if (country && COUNTRY_ALIASES[country.toUpperCase()]) {
-        country = COUNTRY_ALIASES[country.toUpperCase()];
+function processLocation(arg1: string | null | undefined, arg2?: string | null | undefined) {
+    let fullString = [arg1, arg2].filter(Boolean).map(s => String(s).trim()).join(', ');
+    
+    if (!fullString || fullString.toLowerCase() === 'remote' || fullString === 'NULL') {
+        return { finalCity: 'NULL', finalCountry: 'NULL' };
     }
 
-    // 2. The Library Mapper: If we have a City but no Country, find it!
-    if (city && !country) {
-        const foundCities = City.getAllCities().filter((c: any) => c.name.toLowerCase() === city.toLowerCase());
-        if (foundCities.length > 0) {
-            // Grab the first match's country code and translate it to the full name
-            const countryObj = Country.getCountryByCode(foundCities[0].countryCode);
-            if (countryObj) country = countryObj.name;
+    let validCountries: string[] = [];
+    const delimiters = /[,;||\/]/;
+    let tokens = fullString.split(delimiters).map(t => t.trim()).filter(Boolean);
+
+    for (let token of tokens) {
+        let c = token.replace(/remote|worldwide|anywhere|[-()]/ig, '').trim();
+        if (c && COUNTRY_ALIASES[c.toUpperCase()]) c = COUNTRY_ALIASES[c.toUpperCase()];
+        
+        if (c) {
+            c = c.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+            if (VALID_COUNTRIES.has(c)) validCountries.push(c);
         }
     }
 
-    // 3. The Strict Array Bouncer: Validate the country
-    if (country) {
-        // Capitalize first letters so it matches the Set properly
-        const formattedCountry = country.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    let potentialCity = fullString.split(delimiters)[0].trim().replace(/remote|worldwide|anywhere/ig, '').trim();
+    let finalCity = 'NULL';
 
-        if (!VALID_COUNTRIES.has(formattedCountry)) {
-            // If the API sent "EMEA" or "Anywhere", kill it.
-            country = 'NULL';
+    if (potentialCity) {
+        let checkCityAsCountry = potentialCity.toUpperCase();
+        if (COUNTRY_ALIASES[checkCityAsCountry]) checkCityAsCountry = COUNTRY_ALIASES[checkCityAsCountry].toUpperCase();
+        else checkCityAsCountry = potentialCity.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+
+        if (VALID_COUNTRIES.has(checkCityAsCountry)) {
+            finalCity = 'NULL'; 
+            validCountries.push(checkCityAsCountry);
         } else {
-            country = formattedCountry;
+            finalCity = potentialCity;
         }
     }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
+        const checkKey = finalCity.toLowerCase();
+        if (TECH_HUB_OVERRIDES[checkKey]) {
+            validCountries.push(TECH_HUB_OVERRIDES[checkKey]);
+        }
+    }
+
+    if (validCountries.length === 0 && finalCity !== 'NULL') {
+        const foundCity = City.getAllCities().find((c: any) => c.name.toLowerCase() === finalCity.toLowerCase());
+        if (foundCity) {
+            const countryObj = Country.getCountryByCode(foundCity.countryCode);
+            if (countryObj) validCountries.push(countryObj.name);
+        }
+    }
+
+    validCountries = [...new Set(validCountries)]; 
 
     return { 
-        finalCity: city || 'NULL', 
-        finalCountry: country || 'NULL' 
+        finalCity: finalCity || 'NULL', 
+        finalCountry: validCountries.length > 0 ? validCountries.join(', ') : 'NULL' 
     };
 }
 // ==========================================
 
 serve(async (req) => {
-  // 1. DEFINE YOUR TARGET ASHBY COMPANIES
   const companies = [
     { token: 'openai', name: 'OpenAI' },
     { token: 'notion', name: 'Notion' },
@@ -143,20 +178,35 @@ serve(async (req) => {
             else if (et.includes('PART')) mappedType = 'PARTTIME';
         }
 
-        // --- ASHBY LOCATION ---
+        // --- ASHBY MULTI-LOCATION PARSER ---
         let rawCity = 'NULL';
-        let rawCountry = 'NULL';
+        let allRawCountries: string[] = [];
 
         if (job.address && job.address.postalAddress) {
             rawCity = job.address.postalAddress.addressLocality || 'NULL';
-            rawCountry = job.address.postalAddress.addressCountry || 'NULL';
+            if (job.address.postalAddress.addressCountry) {
+                allRawCountries.push(job.address.postalAddress.addressCountry);
+            }
         } else if (job.location) {
-            const parts = job.location.split(',');
+            const parts = String(job.location).split(',');
             if (parts.length > 0) rawCity = parts[0].trim();
-            if (parts.length > 1) rawCountry = parts[parts.length - 1].trim();
+            if (parts.length > 1) allRawCountries.push(parts[parts.length - 1].trim());
+            else allRawCountries.push(parts[0].trim());
         }
 
-        const { finalCity: city, finalCountry: country } = processLocation(rawCity, rawCountry);
+        if (job.secondaryLocations && Array.isArray(job.secondaryLocations)) {
+            job.secondaryLocations.forEach((secLoc: any) => {
+                if (secLoc.address && secLoc.address.postalAddress && secLoc.address.postalAddress.addressCountry) {
+                    allRawCountries.push(secLoc.address.postalAddress.addressCountry);
+                } else if (secLoc.location) {
+                    const parts = String(secLoc.location).split(',');
+                    if (parts.length > 1) allRawCountries.push(parts[parts.length - 1].trim());
+                    else allRawCountries.push(parts[0].trim());
+                }
+            });
+        }
+
+        const { finalCity: city, finalCountry: country } = processLocation(rawCity, allRawCountries.join('; '));
 
         let mappedExp = 'ENTRY';
         const titleLower = (job.title || '').toLowerCase();
@@ -167,6 +217,18 @@ serve(async (req) => {
         } else if (titleLower.includes('head') || titleLower.includes('director') || titleLower.includes('vp')) {
             mappedExp = 'EXECUTIVE';
         }
+
+        // --- KEYWORD EXTRACTOR ---
+        const rawTitle = job.title || '';
+        const rawDept = job.department || '';
+        const rawTeam = job.team || '';
+        const rawCategory = job.jobCategory || '';
+
+        const combinedText = `${rawTitle} ${rawDept} ${rawTeam} ${rawCategory} ${mappedType} ${mappedWorkMode}`.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+
+        const stopWords = new Set(['and', 'or', 'the', 'in', 'of', 'for', 'a', 'to', 'with']);
+        const rawKeywords = combinedText.split(/\s+/).filter(word => word.length > 1 && !stopWords.has(word));
+        const finalKeywords = [...new Set(rawKeywords)];
 
         return {
           job_title: job.title ? job.title.substring(0, 200) : 'Unknown Title', 
@@ -180,7 +242,8 @@ serve(async (req) => {
           industry: job.department ? String(job.department) : 'Sector Agnostic',
           experience: mappedExp,
           event_date: job.publishedAt ? job.publishedAt.split('T')[0] : new Date().toISOString().split('T')[0],
-          webhook_event_id: null
+          webhook_event_id: null,
+          keywords: finalKeywords // 🌟 Feeds the new array column!
         };
       });
 
